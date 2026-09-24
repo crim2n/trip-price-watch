@@ -1,0 +1,62 @@
+name: Trip.com Price Monitor
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    # UTC 01:00, 13:00
+    # 한국시간(KST) 10:00, 22:00
+    - cron: "0 1,13 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: trip-price-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 저장소 내려받기
+        uses: actions/checkout@v4
+
+      - name: Node.js 설치
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 필요한 패키지 설치
+        run: npm install --no-audit --no-fund
+
+      - name: Playwright Chromium 설치
+        run: npx playwright install --with-deps chromium
+
+      - name: 가격 수집 및 Discord 알림
+        id: collect
+        continue-on-error: true
+        env:
+          TRIP_URL: ${{ secrets.TRIP_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: node scripts/monitor.mjs
+
+      - name: 가격 이력 저장
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add docs/history.json data/state.json
+
+          if git diff --cached --quiet; then
+            echo "저장할 변경사항이 없습니다."
+          else
+            git commit -m "chore: record price $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            git push
+          fi
+
+      - name: 수집 실패 상태 표시
+        if: steps.collect.outcome == 'failure'
+        run: exit 1
