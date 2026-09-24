@@ -43,5 +43,22 @@
     "fxSource": "Frankfurter 참조환율",
     "isBelowThreshold": true,
     "alertStatus": "sent"
+  },
+  {
+    "status": "ok",
+    "checkedAt": "2026-09-24T05:49:55.979Z",
+    "label": "마쓰야마 숙소 가격 감시",
+    "priceKrw": 8685,
+    "currency": "KRW",
+    "rawPriceText": "8,685원",
+    "candidateCount": 4,
+    "candidateSource": "body-text-fallback",
+    "thresholdKrw": 850000,
+    "usdKrwPer1": 1365.35,
+    "krwPer100Jpy": 864.5833,
+    "fxAsOf": "2026-09-23",
+    "fxSource": "Frankfurter 참조환율",
+    "isBelowThreshold": true,
+    "alertStatus": "already-alerted"
   }
 ]
