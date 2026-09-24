@@ -6,22 +6,32 @@ const CONFIG_FILE = "config.json";
 const HISTORY_FILE = "docs/history.json";
 const STATE_FILE = "data/state.json";
 
-const config = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+const config = JSON.parse(
+  fs.readFileSync(CONFIG_FILE, "utf8")
+);
+
 const checkedAt = new Date().toISOString();
+
+let lastPriceDiagnostic = {};
 
 function readJson(fileName, fallbackValue) {
   try {
-    return JSON.parse(fs.readFileSync(fileName, "utf8"));
+    return JSON.parse(
+      fs.readFileSync(fileName, "utf8")
+    );
   } catch (error) {
     if (error.code === "ENOENT") {
       return fallbackValue;
     }
+
     throw error;
   }
 }
 
 function writeJson(fileName, value) {
-  fs.mkdirSync(path.dirname(fileName), { recursive: true });
+  fs.mkdirSync(path.dirname(fileName), {
+    recursive: true
+  });
 
   fs.writeFileSync(
     fileName,
@@ -35,24 +45,30 @@ function safeError(error) {
     ? error.message
     : String(error);
 
-  for (const secret of [
+  const secrets = [
     process.env.TRIP_URL,
     process.env.DISCORD_WEBHOOK_URL
-  ]) {
+  ];
+
+  for (const secret of secrets) {
     if (secret) {
       message = message.split(secret).join("[비공개 값]");
     }
   }
 
-  return message.slice(0, 300);
+  return message.slice(0, 500);
 }
 
 function parseKrw(rawText) {
   const compactText = String(rawText)
     .replace(/[\s\u00A0]/g, "");
 
+  if (!/(원|₩|KRW)/i.test(compactText)) {
+    return null;
+  }
+
   const matched = compactText.match(
-    /(\d{1,3}(?:,\d{3})+|\d+)원/
+    /(?:₩|KRW)?(\d{1,3}(?:,\d{3})+|\d+)(?:원)?/i
   );
 
   if (!matched) {
@@ -63,11 +79,25 @@ function parseKrw(rawText) {
     matched[1].replaceAll(",", "")
   );
 
-  if (!Number.isSafeInteger(priceKrw) || priceKrw <= 0) {
+  if (
+    !Number.isSafeInteger(priceKrw) ||
+    priceKrw <= 0
+  ) {
     return null;
   }
 
   return priceKrw;
+}
+
+function isValidHotelPrice(priceKrw) {
+  const min = Number(config.minValidPriceKrw);
+  const max = Number(config.maxValidPriceKrw);
+
+  return (
+    Number.isSafeInteger(priceKrw) &&
+    priceKrw >= min &&
+    priceKrw <= max
+  );
 }
 
 function formatKrw(value) {
@@ -81,129 +111,277 @@ function formatKst(isoDate) {
     timeZone: "Asia/Seoul"
   }).format(new Date(isoDate));
 }
-function extractKrwCandidates(text) {
-  const pattern =
-    /(?:₩|KRW)\s*(\d{1,3}(?:,\d{3})+|\d+)|(\d{1,3}(?:,\d{3})+|\d+)\s*원/gi;
 
-  return [...String(text).matchAll(pattern)]
-    .map((match) => {
-      const numberText = match[1] ?? match[2];
-      const priceKrw = Number(numberText.replaceAll(",", ""));
-
-      return {
-        rawText: match[0].trim(),
-        priceKrw
-      };
-    })
-    .filter(
-      (item) =>
-        Number.isSafeInteger(item.priceKrw) &&
-        item.priceKrw > 0
-    );
+function candidateForLog(candidate, index) {
+  return {
+    index,
+    priceKrw: candidate.priceKrw,
+    rawText: candidate.rawText,
+    tagName: candidate.tagName,
+    className: candidate.className,
+    ariaHidden: candidate.ariaHidden,
+    parentText: candidate.parentText
+  };
 }
-async function findPrice(page) {
-  const priceIndex = Number(config.priceIndex ?? 0);
 
-  if (!Number.isInteger(priceIndex) || priceIndex < 0) {
+async function scanVisiblePriceCandidates(page) {
+  const selector = String(
+    config.candidateSelector ||
+      "span, strong, b, em, i, div, p"
+  );
+
+  const rawCandidates = await page.evaluate(
+    (scanSelector) => {
+      function normalizeText(value) {
+        return String(value)
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+
+      function isVisible(element) {
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          style.opacity !== "0" &&
+          rect.width > 0 &&
+          rect.height > 0
+        );
+      }
+
+      function looksLikeOneKrwPrice(text) {
+        if (!text || text.length > 80) {
+          return false;
+        }
+
+        if (!/(원|₩|KRW)/i.test(text)) {
+          return false;
+        }
+
+        const numberParts = text.match(
+          /\d{1,3}(?:,\d{3})+|\d+/g
+        ) || [];
+
+        return numberParts.length === 1;
+      }
+
+      const elements = Array.from(
+        document.querySelectorAll(scanSelector)
+      );
+
+      const result = [];
+
+      for (const element of elements) {
+        if (!isVisible(element)) {
+          continue;
+        }
+
+        const text = normalizeText(
+          element.innerText || element.textContent || ""
+        );
+
+        if (!looksLikeOneKrwPrice(text)) {
+          continue;
+        }
+
+        const sameTextChildExists = Array.from(
+          element.querySelectorAll(
+            "span, strong, b, em, i, div, p"
+          )
+        ).some((child) => {
+          if (!isVisible(child)) {
+            return false;
+          }
+
+          const childText = normalizeText(
+            child.innerText || child.textContent || ""
+          );
+
+          return (
+            childText === text &&
+            looksLikeOneKrwPrice(childText)
+          );
+        });
+
+        if (sameTextChildExists) {
+          continue;
+        }
+
+        const parent = element.parentElement;
+
+        result.push({
+          rawText: text,
+          tagName: element.tagName.toLowerCase(),
+          className: String(element.className || "")
+            .slice(0, 200),
+          ariaHidden: element.getAttribute("aria-hidden"),
+          parentText: normalizeText(
+            parent?.innerText || ""
+          ).slice(0, 220)
+        });
+      }
+
+      return result.slice(0, 100);
+    },
+    selector
+  );
+
+  const seen = new Set();
+
+  return rawCandidates
+    .map((candidate) => ({
+      ...candidate,
+      priceKrw: parseKrw(candidate.rawText)
+    }))
+    .filter((candidate) => candidate.priceKrw !== null)
+    .filter((candidate) => {
+      const key = [
+        candidate.priceKrw,
+        candidate.rawText,
+        candidate.parentText
+      ].join("|");
+
+      if (seen.has(key)) {
+        return false;
+      }
+
+      seen.add(key);
+      return true;
+    });
+}
+
+async function findPrice(page, referenceKrw) {
+  const rawConfiguredIndex =
+    config.priceCandidateIndex;
+
+  const hasFixedIndex =
+    rawConfiguredIndex !== null &&
+    rawConfiguredIndex !== undefined &&
+    rawConfiguredIndex !== "";
+
+  const fixedIndex = hasFixedIndex
+    ? Number(rawConfiguredIndex)
+    : null;
+
+  if (
+    hasFixedIndex &&
+    (!Number.isInteger(fixedIndex) || fixedIndex < 0)
+  ) {
     throw new Error(
-      "config.json의 priceIndex 값은 0 이상의 정수여야 합니다."
+      "config.json의 priceCandidateIndex는 null 또는 0 이상의 정수여야 합니다."
     );
   }
 
-  await page.locator("body").waitFor({
-    state: "visible",
-    timeout: 20_000
-  });
+  const maxDeviationRatio = Number(
+    config.maxReferenceDeviationRatio ?? 0.7
+  );
 
-  // 동적으로 가격이 표시될 시간을 조금 줍니다.
-  await page.waitForLoadState("networkidle", {
-    timeout: 10_000
-  }).catch(() => {});
+  for (let attempt = 1; attempt <= 35; attempt += 1) {
+    const allCandidates =
+      await scanVisiblePriceCandidates(page);
 
-  let lastDiagnostic = null;
-
-  for (let attempt = 1; attempt <= 45; attempt += 1) {
-    const visibleSelector = `${config.priceSelector}:visible`;
-
-    const selectorTexts = await page
-      .locator(visibleSelector)
-      .allInnerTexts()
-      .catch(() => []);
-
-    const selectorCandidates = selectorTexts.flatMap(
-      extractKrwCandidates
+    const validCandidates = allCandidates.filter(
+      (candidate) =>
+        isValidHotelPrice(candidate.priceKrw)
     );
 
-    // span 내부에 가격이 없어도, 화면 전체 텍스트에
-    // "963,326원" 또는 "₩963,326" 형태가 있으면 찾습니다.
-    const bodyText = await page
-      .locator("body")
-      .innerText()
-      .catch(() => "");
-
-    const bodyCandidates = extractKrwCandidates(bodyText);
-
-    const candidates =
-      selectorCandidates.length > 0
-        ? selectorCandidates
-        : bodyCandidates;
-
-    const candidateSource =
-      selectorCandidates.length > 0
-        ? `selector:${config.priceSelector}`
-        : "body-text-fallback";
-
-    const pageTitle = await page.title().catch(() => "");
-
-    const lowerBodyText = bodyText.toLowerCase();
-
-    const blockWords = [
-      "captcha",
-      "verify",
-      "robot",
-      "access denied",
-      "forbidden",
-      "보안",
-      "인증",
-      "접근 제한",
-      "비정상적인 접근"
-    ].filter((word) =>
-      lowerBodyText.includes(word.toLowerCase())
-    );
-
-    lastDiagnostic = {
+    lastPriceDiagnostic = {
       attempt,
-      pageTitle: pageTitle.slice(0, 120),
-      bodyLength: bodyText.length,
-      selector: config.priceSelector,
-      visibleSelectedElementCount: selectorTexts.length,
-      selectorKrwCandidateCount: selectorCandidates.length,
-      bodyKrwCandidateCount: bodyCandidates.length,
-      bodyKrwSamples: bodyCandidates.slice(0, 5),
-      blockWords
+      candidateSelector: config.candidateSelector,
+      referencePriceKrw: referenceKrw,
+      minValidPriceKrw: config.minValidPriceKrw,
+      maxValidPriceKrw: config.maxValidPriceKrw,
+      allVisibleKrwCandidates: allCandidates.map(
+        candidateForLog
+      ),
+      validCandidates: validCandidates.map(
+        candidateForLog
+      )
     };
 
-    if (candidates.length > priceIndex) {
-      console.log(
-        "가격 후보:",
-        JSON.stringify({
-          candidateSource,
-          candidates: candidates.slice(0, 10)
-        })
+    writeJson(
+      "debug/price-candidates.json",
+      lastPriceDiagnostic
+    );
+
+    if (validCandidates.length > 0) {
+      let selected;
+      let selectedCandidateIndex;
+
+      if (hasFixedIndex) {
+        if (fixedIndex >= validCandidates.length) {
+          throw new Error(
+            `priceCandidateIndex=${fixedIndex}에 해당하는 후보가 없습니다. 유효 후보 수: ${validCandidates.length}`
+          );
+        }
+
+        selected = validCandidates[fixedIndex];
+        selectedCandidateIndex = fixedIndex;
+      } else {
+        const ranked = validCandidates
+          .map((candidate, index) => ({
+            candidate,
+            index,
+            difference: Math.abs(
+              candidate.priceKrw - referenceKrw
+            )
+          }))
+          .sort((a, b) => a.difference - b.difference);
+
+        selected = ranked[0].candidate;
+        selectedCandidateIndex = ranked[0].index;
+      }
+
+      const deviationRatio =
+        referenceKrw > 0
+          ? Math.abs(
+              selected.priceKrw - referenceKrw
+            ) / referenceKrw
+          : 0;
+
+      lastPriceDiagnostic.selectedCandidate =
+        candidateForLog(
+          selected,
+          selectedCandidateIndex
+        );
+
+      lastPriceDiagnostic.selectionMethod =
+        hasFixedIndex
+          ? "priceCandidateIndex"
+          : "nearest-to-reference";
+
+      lastPriceDiagnostic.deviationRatio =
+        deviationRatio;
+
+      writeJson(
+        "debug/price-candidates.json",
+        lastPriceDiagnostic
       );
 
-      return {
-        selected: candidates[priceIndex],
-        candidateCount: candidates.length,
-        candidateSource
-      };
+      if (deviationRatio <= maxDeviationRatio) {
+        console.log(
+          "선택한 가격 후보:",
+          JSON.stringify(
+            lastPriceDiagnostic.selectedCandidate
+          )
+        );
+
+        return {
+          priceKrw: selected.priceKrw,
+          rawPriceText: selected.rawText,
+          candidateCount: validCandidates.length,
+          selectedCandidateIndex,
+          candidateSource: "visible-price-elements"
+        };
+      }
     }
 
-    // 처음과 이후 5초 간격으로 진단 정보를 남깁니다.
     if (attempt === 1 || attempt % 5 === 0) {
       console.log(
-        "페이지 진단:",
-        JSON.stringify(lastDiagnostic)
+        "가격 후보 진단:",
+        JSON.stringify(lastPriceDiagnostic)
       );
     }
 
@@ -211,16 +389,82 @@ async function findPrice(page) {
   }
 
   throw new Error(
-    `가격 후보를 찾지 못했습니다. ${JSON.stringify(lastDiagnostic)}`
+    "유효한 숙소 가격 후보를 선택하지 못했습니다. Actions Artifact의 price-candidates.json과 trip-page.png를 확인하세요."
   );
 }
 
-async function collectPrice() {
+function extractBodyPriceSamples(bodyText) {
+  const pattern =
+    /(?:₩\s*|KRW\s*)?\d{1,3}(?:,\d{3})+(?:\s*원)?/gi;
+
+  return [...String(bodyText).matchAll(pattern)]
+    .map((match) => match[0].trim())
+    .filter((text) => /(원|₩|KRW)/i.test(text))
+    .slice(0, 20);
+}
+
+async function saveDebugArtifacts(page, extra) {
+  fs.mkdirSync("debug", {
+    recursive: true
+  });
+
+  const pageTitle = await page
+    .title()
+    .catch(() => "");
+
+  const bodyText = await page
+    .locator("body")
+    .innerText()
+    .catch(() => "");
+
+  const lowerBodyText = bodyText.toLowerCase();
+
+  const blockWords = [
+    "captcha",
+    "verify",
+    "robot",
+    "access denied",
+    "forbidden",
+    "보안",
+    "인증",
+    "접근 제한",
+    "비정상적인 접근"
+  ].filter((word) =>
+    lowerBodyText.includes(word.toLowerCase())
+  );
+
+  let pagePath = "";
+
+  try {
+    pagePath = new URL(page.url()).pathname;
+  } catch {
+    pagePath = "";
+  }
+
+  writeJson("debug/page-diagnostics.json", {
+    checkedAt,
+    pageTitle,
+    pagePath,
+    bodyLength: bodyText.length,
+    bodyPriceSamples: extractBodyPriceSamples(bodyText),
+    blockWords,
+    lastPriceDiagnostic,
+    ...extra
+  });
+
+  await page.screenshot({
+    path: "debug/trip-page.png",
+    fullPage: true
+  }).catch(() => {});
+}
+
+async function collectPrice(referenceKrw) {
   if (!process.env.TRIP_URL) {
     throw new Error("TRIP_URL Secret이 없습니다.");
   }
 
   let browser;
+  let page;
 
   try {
     browser = await chromium.launch({
@@ -236,21 +480,39 @@ async function collectPrice() {
       }
     });
 
-    const page = await context.newPage();
+    page = await context.newPage();
 
     await page.goto(process.env.TRIP_URL, {
       waitUntil: "domcontentloaded",
       timeout: 90_000
     });
 
-    const result = await findPrice(page);
+    await page.waitForTimeout(4000);
 
-    return {
-  priceKrw: result.selected.priceKrw,
-  rawPriceText: result.selected.rawText,
-  candidateCount: result.candidateCount,
-  candidateSource: result.candidateSource
-};
+    await page.waitForLoadState("networkidle", {
+      timeout: 10_000
+    }).catch(() => {});
+
+    const result = await findPrice(
+      page,
+      referenceKrw
+    );
+
+    await saveDebugArtifacts(page, {
+      status: "ok",
+      selectedPriceKrw: result.priceKrw
+    });
+
+    return result;
+  } catch (error) {
+    if (page) {
+      await saveDebugArtifacts(page, {
+        status: "error",
+        message: safeError(error)
+      }).catch(() => {});
+    }
+
+    throw error;
   } finally {
     await browser?.close();
   }
@@ -262,7 +524,9 @@ async function collectExchangeRates() {
   });
 
   if (!response.ok) {
-    throw new Error(`환율 API 오류: HTTP ${response.status}`);
+    throw new Error(
+      `환율 API 오류: HTTP ${response.status}`
+    );
   }
 
   const data = await response.json();
@@ -271,7 +535,9 @@ async function collectExchangeRates() {
   const usdJpyPer1 = Number(data.rates?.JPY);
 
   if (!(usdKrwPer1 > 0 && usdJpyPer1 > 0)) {
-    throw new Error("환율 응답에 KRW 또는 JPY 값이 없습니다.");
+    throw new Error(
+      "환율 응답에 KRW 또는 JPY 값이 없습니다."
+    );
   }
 
   return {
@@ -286,7 +552,9 @@ async function collectExchangeRates() {
 
 async function sendDiscord(record) {
   if (!process.env.DISCORD_WEBHOOK_URL) {
-    throw new Error("DISCORD_WEBHOOK_URL Secret이 없습니다.");
+    throw new Error(
+      "DISCORD_WEBHOOK_URL Secret이 없습니다."
+    );
   }
 
   const content = [
@@ -321,10 +589,26 @@ async function sendDiscord(record) {
   }
 }
 
+const previousState = readJson(STATE_FILE, {
+  belowThreshold: false,
+  alertPending: false,
+  lastValidPriceKrw: null
+});
+
+const previousValidPrice = Number(
+  previousState.lastValidPriceKrw
+);
+
+const referenceKrw = isValidHotelPrice(
+  previousValidPrice
+)
+  ? previousValidPrice
+  : Number(config.referencePriceKrw);
+
 let record;
 
 try {
-  const trip = await collectPrice();
+  const trip = await collectPrice(referenceKrw);
 
   let fx = {
     usdKrwPer1: null,
@@ -347,20 +631,16 @@ try {
     currency: "KRW",
     rawPriceText: trip.rawPriceText,
     candidateCount: trip.candidateCount,
+    selectedCandidateIndex:
+      trip.selectedCandidateIndex,
     candidateSource: trip.candidateSource,
+    referenceKrw,
     thresholdKrw: config.thresholdKrw,
     ...fx
   };
 
-  const previousState = readJson(STATE_FILE, {
-    belowThreshold: false,
-    alertPending: false
-  });
-
   const isBelowThreshold =
     record.priceKrw <= config.thresholdKrw;
-
-  record.isBelowThreshold = isBelowThreshold;
 
   const shouldNotify =
     isBelowThreshold &&
@@ -370,6 +650,8 @@ try {
     );
 
   let alertPending = false;
+
+  record.isBelowThreshold = isBelowThreshold;
 
   if (shouldNotify) {
     try {
@@ -390,7 +672,7 @@ try {
     belowThreshold: isBelowThreshold,
     alertPending,
     lastCheckedAt: checkedAt,
-    lastPriceKrw: record.priceKrw
+    lastValidPriceKrw: record.priceKrw
   });
 } catch (error) {
   record = {
@@ -405,10 +687,13 @@ try {
 const history = readJson(HISTORY_FILE, []);
 
 if (!Array.isArray(history)) {
-  throw new Error("docs/history.json은 JSON 배열([])이어야 합니다.");
+  throw new Error(
+    "docs/history.json은 JSON 배열([])이어야 합니다."
+  );
 }
 
 history.push(record);
+
 writeJson(HISTORY_FILE, history);
 
 console.log(JSON.stringify(record, null, 2));
