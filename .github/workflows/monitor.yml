@@ -42,6 +42,15 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: node scripts/monitor.mjs
 
+      - name: 가격 화면 및 후보 진단 파일 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trip-price-diagnostics
+          path: debug/
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: 가격 이력 저장
         if: always()
         run: |
