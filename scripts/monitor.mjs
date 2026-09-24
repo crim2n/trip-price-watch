@@ -12,13 +12,9 @@ const config = JSON.parse(
 
 const checkedAt = new Date().toISOString();
 
-let lastPriceDiagnostic = {};
-
 function readJson(fileName, fallbackValue) {
   try {
-    return JSON.parse(
-      fs.readFileSync(fileName, "utf8")
-    );
+    return JSON.parse(fs.readFileSync(fileName, "utf8"));
   } catch (error) {
     if (error.code === "ENOENT") {
       return fallbackValue;
@@ -59,45 +55,27 @@ function safeError(error) {
   return message.slice(0, 500);
 }
 
-function parseKrw(rawText) {
-  const compactText = String(rawText)
+function parseKrw(text) {
+  const compact = String(text ?? "")
     .replace(/[\s\u00A0]/g, "");
 
-  if (!/(원|₩|KRW)/i.test(compactText)) {
-    return null;
-  }
-
-  const matched = compactText.match(
-    /(?:₩|KRW)?(\d{1,3}(?:,\d{3})+|\d+)(?:원)?/i
+  const matched = compact.match(
+    /(\d{1,3}(?:,\d{3})+|\d+)원/
   );
 
   if (!matched) {
     return null;
   }
 
-  const priceKrw = Number(
-    matched[1].replaceAll(",", "")
+  const value = Number(
+    matched<span class="source-number-link inline-flex items-center justify-center w-6 h-6 bg-bg-200 rounded-full cursor-pointer hover:bg-[#E9E9E9] transition-colors" data-source-index="0" data-source-url="https://apps.apple.com/us/app/google/id284815942" style="margin: 0 2px; vertical-align: middle;"><span class="text-[14px] font-normal text-[#666666] font-pretendard leading-[1.286]">1</span></span>.replaceAll(",", "")
   );
 
-  if (
-    !Number.isSafeInteger(priceKrw) ||
-    priceKrw <= 0
-  ) {
+  if (!Number.isSafeInteger(value) || value <= 0) {
     return null;
   }
 
-  return priceKrw;
-}
-
-function isValidHotelPrice(priceKrw) {
-  const min = Number(config.minValidPriceKrw);
-  const max = Number(config.maxValidPriceKrw);
-
-  return (
-    Number.isSafeInteger(priceKrw) &&
-    priceKrw >= min &&
-    priceKrw <= max
-  );
+  return value;
 }
 
 function formatKrw(value) {
@@ -112,32 +90,64 @@ function formatKst(isoDate) {
   }).format(new Date(isoDate));
 }
 
-function candidateForLog(candidate, index) {
-  return {
-    index,
-    priceKrw: candidate.priceKrw,
-    rawText: candidate.rawText,
-    tagName: candidate.tagName,
-    className: candidate.className,
-    ariaHidden: candidate.ariaHidden,
-    parentText: candidate.parentText
-  };
+function getPublicPageAddress(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+
+    // 일정·인원 등이 들어 있는 query string은 Artifact에 저장하지 않음
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return "";
+  }
 }
 
-async function scanVisiblePriceCandidates(page) {
-  const selector = String(
-    config.candidateSelector ||
-      "span, strong, b, em, i, div, p"
+function isExpectedPrice(priceKrw) {
+  const minimum = Number(
+    config.minimumExpectedPriceKrw
   );
 
-  const rawCandidates = await page.evaluate(
-    (scanSelector) => {
-      function normalizeText(value) {
-        return String(value)
-          .replace(/\s+/g, " ")
-          .trim();
-      }
+  const maximum = Number(
+    config.maximumExpectedPriceKrw
+  );
 
+  const reference = Number(
+    config.referencePriceKrw
+  );
+
+  const maximumDeviationRatio = Number(
+    config.maximumReferenceDeviationRatio
+  );
+
+  if (
+    !Number.isSafeInteger(priceKrw) ||
+    priceKrw < minimum ||
+    priceKrw > maximum
+  ) {
+    return false;
+  }
+
+  if (
+    Number.isSafeInteger(reference) &&
+    reference > 0 &&
+    Number.isFinite(maximumDeviationRatio)
+  ) {
+    const deviationRatio =
+      Math.abs(priceKrw - reference) / reference;
+
+    if (deviationRatio > maximumDeviationRatio) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+async function getVisiblePriceCandidates(page) {
+  const selector = String(config.priceSelector);
+
+  const rawCandidates = await page
+    .locator(selector)
+    .evaluateAll((elements) => {
       function isVisible(element) {
         const style = window.getComputedStyle(element);
         const rect = element.getBoundingClientRect();
@@ -151,324 +161,96 @@ async function scanVisiblePriceCandidates(page) {
         );
       }
 
-      function looksLikeOneKrwPrice(text) {
-        if (!text || text.length > 80) {
-          return false;
-        }
-
-        if (!/(원|₩|KRW)/i.test(text)) {
-          return false;
-        }
-
-        const numberParts = text.match(
-          /\d{1,3}(?:,\d{3})+|\d+/g
-        ) || [];
-
-        return numberParts.length === 1;
+      function cleanText(value) {
+        return String(value ?? "")
+          .replace(/\s+/g, " ")
+          .trim();
       }
 
-      const elements = Array.from(
-        document.querySelectorAll(scanSelector)
-      );
-
-      const result = [];
-
-      for (const element of elements) {
-        if (!isVisible(element)) {
-          continue;
-        }
-
-        const text = normalizeText(
-          element.innerText || element.textContent || ""
-        );
-
-        if (!looksLikeOneKrwPrice(text)) {
-          continue;
-        }
-
-        const sameTextChildExists = Array.from(
-          element.querySelectorAll(
-            "span, strong, b, em, i, div, p"
-          )
-        ).some((child) => {
-          if (!isVisible(child)) {
-            return false;
+      return elements
+        .map((element, sourceIndex) => {
+          if (!isVisible(element)) {
+            return null;
           }
 
-          const childText = normalizeText(
-            child.innerText || child.textContent || ""
-          );
+          const parent = element.parentElement;
 
-          return (
-            childText === text &&
-            looksLikeOneKrwPrice(childText)
-          );
-        });
-
-        if (sameTextChildExists) {
-          continue;
-        }
-
-        const parent = element.parentElement;
-
-        result.push({
-          rawText: text,
-          tagName: element.tagName.toLowerCase(),
-          className: String(element.className || "")
-            .slice(0, 200),
-          ariaHidden: element.getAttribute("aria-hidden"),
-          parentText: normalizeText(
-            parent?.innerText || ""
-          ).slice(0, 220)
-        });
-      }
-
-      return result.slice(0, 100);
-    },
-    selector
-  );
-
-  const seen = new Set();
+          return {
+            sourceIndex,
+            rawText: cleanText(
+              element.innerText || element.textContent
+            ),
+            tagName: element.tagName.toLowerCase(),
+            className: String(
+              element.getAttribute("class") ?? ""
+            ).slice(0, 300),
+            ariaHidden: element.getAttribute("aria-hidden"),
+            parentText: cleanText(
+              parent?.innerText || parent?.textContent
+            ).slice(0, 250)
+          };
+        })
+        .filter(Boolean);
+    });
 
   return rawCandidates
     .map((candidate) => ({
       ...candidate,
       priceKrw: parseKrw(candidate.rawText)
     }))
-    .filter((candidate) => candidate.priceKrw !== null)
-    .filter((candidate) => {
-      const key = [
-        candidate.priceKrw,
-        candidate.rawText,
-        candidate.parentText
-      ].join("|");
-
-      if (seen.has(key)) {
-        return false;
-      }
-
-      seen.add(key);
-      return true;
-    });
+    .filter((candidate) => candidate.priceKrw !== null);
 }
 
-async function findPrice(page, referenceKrw) {
-  const rawConfiguredIndex =
-    config.priceCandidateIndex;
-
-  const hasFixedIndex =
-    rawConfiguredIndex !== null &&
-    rawConfiguredIndex !== undefined &&
-    rawConfiguredIndex !== "";
-
-  const fixedIndex = hasFixedIndex
-    ? Number(rawConfiguredIndex)
-    : null;
-
-  if (
-    hasFixedIndex &&
-    (!Number.isInteger(fixedIndex) || fixedIndex < 0)
-  ) {
-    throw new Error(
-      "config.json의 priceCandidateIndex는 null 또는 0 이상의 정수여야 합니다."
-    );
-  }
-
-  const maxDeviationRatio = Number(
-    config.maxReferenceDeviationRatio ?? 0.7
-  );
-
-  for (let attempt = 1; attempt <= 35; attempt += 1) {
-    const allCandidates =
-      await scanVisiblePriceCandidates(page);
-
-    const validCandidates = allCandidates.filter(
-      (candidate) =>
-        isValidHotelPrice(candidate.priceKrw)
-    );
-
-    lastPriceDiagnostic = {
-      attempt,
-      candidateSelector: config.candidateSelector,
-      referencePriceKrw: referenceKrw,
-      minValidPriceKrw: config.minValidPriceKrw,
-      maxValidPriceKrw: config.maxValidPriceKrw,
-      allVisibleKrwCandidates: allCandidates.map(
-        candidateForLog
-      ),
-      validCandidates: validCandidates.map(
-        candidateForLog
-      )
-    };
-
-    writeJson(
-      "debug/price-candidates.json",
-      lastPriceDiagnostic
-    );
-
-    if (validCandidates.length > 0) {
-      let selected;
-      let selectedCandidateIndex;
-
-      if (hasFixedIndex) {
-        if (fixedIndex >= validCandidates.length) {
-          throw new Error(
-            `priceCandidateIndex=${fixedIndex}에 해당하는 후보가 없습니다. 유효 후보 수: ${validCandidates.length}`
-          );
-        }
-
-        selected = validCandidates[fixedIndex];
-        selectedCandidateIndex = fixedIndex;
-      } else {
-        const ranked = validCandidates
-          .map((candidate, index) => ({
-            candidate,
-            index,
-            difference: Math.abs(
-              candidate.priceKrw - referenceKrw
-            )
-          }))
-          .sort((a, b) => a.difference - b.difference);
-
-        selected = ranked[0].candidate;
-        selectedCandidateIndex = ranked[0].index;
-      }
-
-      const deviationRatio =
-        referenceKrw > 0
-          ? Math.abs(
-              selected.priceKrw - referenceKrw
-            ) / referenceKrw
-          : 0;
-
-      lastPriceDiagnostic.selectedCandidate =
-        candidateForLog(
-          selected,
-          selectedCandidateIndex
-        );
-
-      lastPriceDiagnostic.selectionMethod =
-        hasFixedIndex
-          ? "priceCandidateIndex"
-          : "nearest-to-reference";
-
-      lastPriceDiagnostic.deviationRatio =
-        deviationRatio;
-
-      writeJson(
-        "debug/price-candidates.json",
-        lastPriceDiagnostic
-      );
-
-      if (deviationRatio <= maxDeviationRatio) {
-        console.log(
-          "선택한 가격 후보:",
-          JSON.stringify(
-            lastPriceDiagnostic.selectedCandidate
-          )
-        );
-
-        return {
-          priceKrw: selected.priceKrw,
-          rawPriceText: selected.rawText,
-          candidateCount: validCandidates.length,
-          selectedCandidateIndex,
-          candidateSource: "visible-price-elements"
-        };
-      }
-    }
-
-    if (attempt === 1 || attempt % 5 === 0) {
-      console.log(
-        "가격 후보 진단:",
-        JSON.stringify(lastPriceDiagnostic)
-      );
-    }
-
-    await page.waitForTimeout(1000);
-  }
-
-  throw new Error(
-    "유효한 숙소 가격 후보를 선택하지 못했습니다. Actions Artifact의 price-candidates.json과 trip-page.png를 확인하세요."
-  );
-}
-
-function extractBodyPriceSamples(bodyText) {
-  const pattern =
-    /(?:₩\s*|KRW\s*)?\d{1,3}(?:,\d{3})+(?:\s*원)?/gi;
-
-  return [...String(bodyText).matchAll(pattern)]
-    .map((match) => match[0].trim())
-    .filter((text) => /(원|₩|KRW)/i.test(text))
-    .slice(0, 20);
-}
-
-async function saveDebugArtifacts(page, extra) {
+async function saveDebugFiles(page, diagnostic) {
   fs.mkdirSync("debug", {
     recursive: true
   });
 
-  const pageTitle = await page
-    .title()
-    .catch(() => "");
-
-  const bodyText = await page
-    .locator("body")
-    .innerText()
-    .catch(() => "");
-
-  const lowerBodyText = bodyText.toLowerCase();
-
-  const blockWords = [
-    "captcha",
-    "verify",
-    "robot",
-    "access denied",
-    "forbidden",
-    "보안",
-    "인증",
-    "접근 제한",
-    "비정상적인 접근"
-  ].filter((word) =>
-    lowerBodyText.includes(word.toLowerCase())
-  );
-
-  let pagePath = "";
-
-  try {
-    pagePath = new URL(page.url()).pathname;
-  } catch {
-    pagePath = "";
-  }
-
-  writeJson("debug/page-diagnostics.json", {
-    checkedAt,
-    pageTitle,
-    pagePath,
-    bodyLength: bodyText.length,
-    bodyPriceSamples: extractBodyPriceSamples(bodyText),
-    blockWords,
-    lastPriceDiagnostic,
-    ...extra
-  });
+  const pageTitle = await page.title().catch(() => "");
 
   await page.screenshot({
     path: "debug/trip-page.png",
     fullPage: true
   }).catch(() => {});
+
+  writeJson("debug/chrome-diagnostics.json", {
+    checkedAt,
+    browser: "Google Chrome Stable",
+    pageTitle,
+    finalPageAddress: getPublicPageAddress(page.url()),
+    ...diagnostic
+  });
 }
 
-async function collectPrice(referenceKrw) {
+async function collectTripPrice() {
   if (!process.env.TRIP_URL) {
     throw new Error("TRIP_URL Secret이 없습니다.");
   }
 
   let browser;
   let page;
+  let latestDiagnostic = {};
 
   try {
+    /*
+      중요:
+      기본 Playwright Chromium이 아니라
+      Workflow에서 설치한 Google Chrome을 실행합니다.
+    */
     browser = await chromium.launch({
-      headless: true
+      channel: "chrome",
+
+      /*
+        GitHub Actions의 Xvfb 가상 화면에서
+        실제 Chrome 창 방식으로 실행합니다.
+      */
+      headless: false,
+
+      args: [
+        "--lang=ko-KR",
+        "--window-size=1440,1800",
+        "--disable-dev-shm-usage"
+      ]
     });
 
     const context = await browser.newContext({
@@ -476,40 +258,101 @@ async function collectPrice(referenceKrw) {
       timezoneId: "Asia/Seoul",
       viewport: {
         width: 1440,
-        height: 1200
+        height: 1800
       }
     });
 
     page = await context.newPage();
 
+    /*
+      이 줄은 GitHub Secret에 저장된
+      사용자의 원래 Trip.com 전체 URL을 그대로 엽니다.
+    */
     await page.goto(process.env.TRIP_URL, {
       waitUntil: "domcontentloaded",
       timeout: 90_000
     });
 
-    await page.waitForTimeout(4000);
-
-    await page.waitForLoadState("networkidle", {
-      timeout: 10_000
-    }).catch(() => {});
-
-    const result = await findPrice(
-      page,
-      referenceKrw
-    );
-
-    await saveDebugArtifacts(page, {
-      status: "ok",
-      selectedPriceKrw: result.priceKrw
+    await page.locator("body").waitFor({
+      state: "visible",
+      timeout: 30_000
     });
 
-    return result;
+    /*
+      Trip.com 객실/가격 영역의 동적 로딩 대기
+    */
+    await page.waitForTimeout(10_000);
+
+    await page.waitForLoadState("networkidle", {
+      timeout: 15_000
+    }).catch(() => {});
+
+    const configuredIndex = Number(config.priceIndex);
+
+    if (
+      !Number.isInteger(configuredIndex) ||
+      configuredIndex < 0
+    ) {
+      throw new Error(
+        "config.json의 priceIndex는 0 이상의 정수여야 합니다."
+      );
+    }
+
+    for (let attempt = 1; attempt <= 30; attempt += 1) {
+      const candidates = await getVisiblePriceCandidates(page);
+
+      const selected = candidates[configuredIndex];
+
+      latestDiagnostic = {
+        status: "checking",
+        attempt,
+        selector: config.priceSelector,
+        selectedIndex: configuredIndex,
+        visiblePriceCandidates: candidates,
+        selectedCandidate: selected ?? null
+      };
+
+      if (selected && isExpectedPrice(selected.priceKrw)) {
+        latestDiagnostic.status = "ok";
+
+        await saveDebugFiles(page, latestDiagnostic);
+
+        console.log(
+          "선택된 가격:",
+          JSON.stringify(selected, null, 2)
+        );
+
+        return {
+          priceKrw: selected.priceKrw,
+          rawPriceText: selected.rawText,
+          candidateCount: candidates.length,
+          sourceIndex: selected.sourceIndex,
+          selector: config.priceSelector
+        };
+      }
+
+      await page.waitForTimeout(1_000);
+    }
+
+    latestDiagnostic.status = "error";
+    latestDiagnostic.reason =
+      "목표 가격 선택자를 찾지 못했거나, 선택된 값이 예상 가격 범위를 벗어났습니다.";
+
+    await saveDebugFiles(page, latestDiagnostic);
+
+    throw new Error(
+      "검증된 숙소 가격을 찾지 못했습니다. " +
+      "Artifacts의 trip-page.png 및 chrome-diagnostics.json을 확인하세요."
+    );
   } catch (error) {
     if (page) {
-      await saveDebugArtifacts(page, {
-        status: "error",
-        message: safeError(error)
-      }).catch(() => {});
+      latestDiagnostic.status = "error";
+      latestDiagnostic.error = safeError(error);
+
+      await saveDebugFiles(
+        page,
+        latestDiagnostic
+      ).catch(() => {});
     }
 
     throw error;
@@ -529,10 +372,10 @@ async function collectExchangeRates() {
     );
   }
 
-  const data = await response.json();
+  const result = await response.json();
 
-  const usdKrwPer1 = Number(data.rates?.KRW);
-  const usdJpyPer1 = Number(data.rates?.JPY);
+  const usdKrwPer1 = Number(result.rates?.KRW);
+  const usdJpyPer1 = Number(result.rates?.JPY);
 
   if (!(usdKrwPer1 > 0 && usdJpyPer1 > 0)) {
     throw new Error(
@@ -545,7 +388,7 @@ async function collectExchangeRates() {
     krwPer100Jpy: Number(
       ((usdKrwPer1 / usdJpyPer1) * 100).toFixed(4)
     ),
-    fxAsOf: data.date ?? null,
+    fxAsOf: result.date ?? null,
     fxSource: config.fxSource
   };
 }
@@ -557,7 +400,7 @@ async function sendDiscord(record) {
     );
   }
 
-  const content = [
+  const message = [
     "🚨 Trip.com 가격 알림",
     config.label,
     `표시 가격: ${formatKrw(record.priceKrw)}`,
@@ -573,7 +416,7 @@ async function sendDiscord(record) {
         "content-type": "application/json"
       },
       body: JSON.stringify({
-        content,
+        content: message,
         allowed_mentions: {
           parse: []
         }
@@ -591,24 +434,13 @@ async function sendDiscord(record) {
 
 const previousState = readJson(STATE_FILE, {
   belowThreshold: false,
-  alertPending: false,
-  lastValidPriceKrw: null
+  alertPending: false
 });
-
-const previousValidPrice = Number(
-  previousState.lastValidPriceKrw
-);
-
-const referenceKrw = isValidHotelPrice(
-  previousValidPrice
-)
-  ? previousValidPrice
-  : Number(config.referencePriceKrw);
 
 let record;
 
 try {
-  const trip = await collectPrice(referenceKrw);
+  const trip = await collectTripPrice();
 
   let fx = {
     usdKrwPer1: null,
@@ -631,10 +463,8 @@ try {
     currency: "KRW",
     rawPriceText: trip.rawPriceText,
     candidateCount: trip.candidateCount,
-    selectedCandidateIndex:
-      trip.selectedCandidateIndex,
-    candidateSource: trip.candidateSource,
-    referenceKrw,
+    sourceIndex: trip.sourceIndex,
+    selector: trip.selector,
     thresholdKrw: config.thresholdKrw,
     ...fx
   };
@@ -642,38 +472,53 @@ try {
   const isBelowThreshold =
     record.priceKrw <= config.thresholdKrw;
 
-  const shouldNotify =
-    isBelowThreshold &&
-    (
-      !previousState.belowThreshold ||
-      previousState.alertPending
-    );
-
-  let alertPending = false;
-
   record.isBelowThreshold = isBelowThreshold;
 
-  if (shouldNotify) {
-    try {
-      await sendDiscord(record);
-      record.alertStatus = "sent";
-    } catch (error) {
-      record.alertStatus = "failed";
-      record.alertError = safeError(error);
-      alertPending = true;
-    }
-  } else {
-    record.alertStatus = isBelowThreshold
-      ? "already-alerted"
-      : "not-needed";
-  }
+  /*
+    테스트 중에는 alertsEnabled=false 상태이므로
+    Discord 메시지를 보내지 않습니다.
+  */
+  if (config.alertsEnabled !== true) {
+    record.alertStatus = "disabled";
 
-  writeJson(STATE_FILE, {
-    belowThreshold: isBelowThreshold,
-    alertPending,
-    lastCheckedAt: checkedAt,
-    lastValidPriceKrw: record.priceKrw
-  });
+    writeJson(STATE_FILE, {
+      belowThreshold: false,
+      alertPending: false,
+      lastCheckedAt: checkedAt,
+      lastPriceKrw: record.priceKrw
+    });
+  } else {
+    const shouldNotify =
+      isBelowThreshold &&
+      (
+        !previousState.belowThreshold ||
+        previousState.alertPending
+      );
+
+    let alertPending = false;
+
+    if (shouldNotify) {
+      try {
+        await sendDiscord(record);
+        record.alertStatus = "sent";
+      } catch (error) {
+        record.alertStatus = "failed";
+        record.alertError = safeError(error);
+        alertPending = true;
+      }
+    } else {
+      record.alertStatus = isBelowThreshold
+        ? "already-alerted"
+        : "not-needed";
+    }
+
+    writeJson(STATE_FILE, {
+      belowThreshold: isBelowThreshold,
+      alertPending,
+      lastCheckedAt: checkedAt,
+      lastPriceKrw: record.priceKrw
+    });
+  }
 } catch (error) {
   record = {
     status: "error",
