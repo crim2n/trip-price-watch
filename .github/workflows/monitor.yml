@@ -3,11 +3,6 @@ name: Trip.com Price Monitor
 on:
   workflow_dispatch:
 
-  schedule:
-    # UTC 01:00, 13:00
-    # 한국시간(KST) 10:00, 22:00
-    - cron: "0 1,13 * * *"
-
 permissions:
   contents: write
 
@@ -31,24 +26,32 @@ jobs:
       - name: 필요한 패키지 설치
         run: npm install --no-audit --no-fund
 
-      - name: Playwright Chromium 설치
-        run: npx playwright install --with-deps chromium
+      - name: Google Chrome 및 가상 화면 설치
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          npx playwright install --with-deps chrome
+          google-chrome --version || google-chrome-stable --version
 
-      - name: 가격 수집 및 Discord 알림
+      - name: 원래 Trip.com 주소를 Google Chrome으로 열어 가격 수집
         id: collect
         continue-on-error: true
         env:
           TRIP_URL: ${{ secrets.TRIP_URL }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: node scripts/monitor.mjs
+        run: |
+          xvfb-run \
+            --auto-servernum \
+            --server-args="-screen 0 1440x1800x24" \
+            node scripts/monitor.mjs
 
-      - name: 가격 화면 및 후보 진단 파일 업로드
+      - name: Chrome 화면 및 진단 파일 업로드
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: trip-price-diagnostics
           path: debug/
-          if-no-files-found: ignore
+          if-no-files-found: warn
           retention-days: 7
 
       - name: 가격 이력 저장
