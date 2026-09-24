@@ -1,8 +1,0 @@
-{
-  "name": "trip-price-watch",
-  "private": true,
-  "type": "module",
-  "dependencies": {
-    "playwright": "1.54.0"
-  }
-}
