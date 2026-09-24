@@ -1,9 +1,1 @@
-[
-  {
-    "status": "error",
-    "checkedAt": "2026-09-24T06:16:01.365Z",
-    "label": "마쓰야마 숙소 가격 감시",
-    "thresholdKrw": 850000,
-    "message": "유효한 숙소 가격 후보를 선택하지 못했습니다. Actions Artifact의 price-candidates.json과 trip-page.png를 확인하세요."
-  }
-]
+[]
