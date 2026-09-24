@@ -1,0 +1,54 @@
+name: Trip.com Google Chrome Check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  chrome-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 저장소 내려받기
+        uses: actions/checkout@v4
+
+      - name: Node.js 설치
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 필요한 패키지 설치
+        run: npm install --no-audit --no-fund
+
+      - name: Google Chrome Stable 및 가상 화면 설치
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          npx playwright install --with-deps chrome
+          google-chrome --version || google-chrome-stable --version
+
+      - name: Google Chrome으로 Trip.com 화면 확인
+        env:
+          TRIP_URL: ${{ secrets.TRIP_URL }}
+
+          # 첫 테스트에서는 비워 두세요.
+          # 나중에 호텔명·객실명 등 고유 문구를 넣어
+          # 해당 문구가 화면에 있는지 검사할 수 있습니다.
+          EXPECTED_TEXT: ""
+
+        run: |
+          xvfb-run \
+            --auto-servernum \
+            --server-args="-screen 0 1440x1800x24" \
+            node scripts/chrome-check.mjs
+
+      - name: Chrome 화면 및 진단 파일 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trip-chrome-check
+          path: debug/
+          if-no-files-found: warn
+          retention-days: 7
