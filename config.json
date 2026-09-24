@@ -1,8 +1,16 @@
 {
   "label": "마쓰야마 숙소 가격 감시",
   "thresholdKrw": 850000,
-  "priceSelector": "span[class*=\"bold-text__\"][aria-hidden=\"true\"]",
-  "priceIndex": 0,
+
+  "minValidPriceKrw": 300000,
+  "maxValidPriceKrw": 2000000,
+
+  "referencePriceKrw": 963326,
+  "maxReferenceDeviationRatio": 0.7,
+
+  "candidateSelector": "span, strong, b, em, i, div, p",
+  "priceCandidateIndex": null,
+
   "fxUrl": "https://api.frankfurter.app/latest?from=USD&to=KRW,JPY",
   "fxSource": "Frankfurter 참조환율"
 }
