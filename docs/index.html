@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Trip.com 가격 모니터</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
+
+  <style>
+    body {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 28px 16px 48px;
+      color: #172033;
+      background: #f5f7fb;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont,
+        "Segoe UI", sans-serif;
+    }
+
+    h1, h2 {
+      margin-top: 0;
+    }
+
+    .description {
+      color: #667085;
+      line-height: 1.6;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 12px;
+      margin: 20px 0;
+    }
+
+    .card,
+    section {
+      border: 1px solid #dde3ee;
+      border-radius: 12px;
+      background: #ffffff;
+      box-shadow: 0 2px 8px rgb(15 23 42 / 4%);
+    }
+
+    .card {
+      padding: 16px;
+    }
+
+    .label {
+      color: #667085;
+      font-size: 13px;
+    }
+
+    .value {
+      margin-top: 8px;
+      font-size: 23px;
+      font-weight: 700;
+    }
+
+    section {
+      margin-top: 20px;
+      padding: 18px;
+    }
+
+    canvas {
+      max-height: 360px;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    th,
+    td {
+      padding: 10px;
+      border-bottom: 1px solid #e8edf5;
+      text-align: right;
+    }
+
+    th:first-child,
+    td:first-child {
+      text-align: left;
+    }
+
+    .error-row {
+      color: #b42318;
+    }
+
+    #errorBox {
+      display: none;
+      margin-top: 16px;
+      padding: 14px;
+      color: #b42318;
+      border: 1px solid #fecdca;
+      border-radius: 10px;
+      background: #fef3f2;
+    }
+  </style>
+</head>
+
+<body>
+  <main>
+    <h1>Trip.com 가격 모니터</h1>
+<p class="description">
+      가격은 자동 수집 시점의 Trip.com 표시값입니다.
+      환율은 참고용 기준환율입니다.
+    </p>
+
+    <div id="errorBox"></div>
+<div class="cards">
+      <div class="card">
+        <div class="label">최근 표시 가격</div>
+<div class="value" id="latestPrice">
+          아직 정상 수집 기록 없음
+        </div>
+</div>
+
+      <div class="card">
+        <div class="label">알림 기준</div>
+<div class="value" id="thresholdPrice">850,000원</div>
+</div>
+
+      <div class="card">
+        <div class="label">최근 KRW / 100 JPY</div>
+<div class="value" id="latestJpy">—</div>
+</div>
+
+      <div class="card">
+        <div class="label">최근 KRW / 1 USD</div>
+<div
+
+---
+
+실행 시간이 제한을 초과해 여기까지 확인된 내용으로 마무리했습니다. 이어서 필요한 부분이 있으면 다시 요청해 주세요.
