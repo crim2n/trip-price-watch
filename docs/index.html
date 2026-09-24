@@ -18,15 +18,6 @@
         "Segoe UI", sans-serif;
     }
 
-    h1, h2 {
-      margin-top: 0;
-    }
-
-    .description {
-      color: #667085;
-      line-height: 1.6;
-    }
-
     .cards {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
@@ -64,6 +55,11 @@
 
     canvas {
       max-height: 360px;
+    }
+
+    .description {
+      color: #667085;
+      line-height: 1.6;
     }
 
     .table-wrap {
@@ -110,23 +106,19 @@
     <h1>Trip.com 가격 모니터</h1>
 <p class="description">
       가격은 자동 수집 시점의 Trip.com 표시값입니다.
-      환율은 참고용 기준환율이며 실제 카드·현찰 환율과 다를 수 있습니다.
+      환율은 참고용 기준환율입니다.
     </p>
 
     <div id="errorBox"></div>
 <div class="cards">
       <div class="card">
         <div class="label">최근 표시 가격</div>
-<div class="value" id="latestPrice">
-          아직 정상 수집 기록 없음
-        </div>
+<div class="value" id="latestPrice">아직 정상 수집 기록 없음</div>
 </div>
 
       <div class="card">
         <div class="label">알림 기준</div>
-<div class="value" id="thresholdPrice">
-          850,000원
-        </div>
+<div class="value" id="thresholdPrice">850,000원</div>
 </div>
 
       <div class="card">
@@ -174,12 +166,11 @@
   </main>
 
   <script>
-    const getElement = (id) =>
-      document.getElementById(id);
+    const element = (id) => document.getElementById(id);
 
-    const moneyFormatter = new Intl.NumberFormat("ko-KR");
+    const money = new Intl.NumberFormat("ko-KR");
 
-    const decimalFormatter = new Intl.NumberFormat("ko-KR", {
+    const decimal = new Intl.NumberFormat("ko-KR", {
       maximumFractionDigits: 2
     });
 
@@ -190,119 +181,110 @@
 
     function formatKrw(value) {
       return isNumber(value)
-        ? `${moneyFormatter.format(value)}원`
+        ? `${money.format(value)}원`
         : "—";
     }
 
     function formatRate(value) {
       return isNumber(value)
-        ? decimalFormatter.format(value)
+        ? decimal.format(value)
         : "—";
     }
 
-    function formatKst(isoDate) {
+    function formatKst(value) {
+      if (!value) {
+        return "—";
+      }
+
       return new Intl.DateTimeFormat("ko-KR", {
         dateStyle: "short",
         timeStyle: "short",
         timeZone: "Asia/Seoul"
-      }).format(new Date(isoDate));
+      }).format(new Date(value));
     }
 
-    function addCell(tableRow, text) {
-      const cell = document.createElement("td");
-      cell.textContent = text;
-      tableRow.appendChild(cell);
-    }
-
-    function renderTable(allRecords) {
-      const tbody = getElement("historyRows");
+    function renderTable(records) {
+      const tbody = element("historyRows");
 
       tbody.replaceChildren();
 
-      if (allRecords.length === 0) {
-        const row = document.createElement("tr");
-        const cell = document.createElement("td");
+      if (records.length === 0) {
+        const tr = document.createElement("tr");
+        const td = document.createElement("td");
 
-        cell.colSpan = 6;
-        cell.textContent = "아직 수집 이력이 없습니다.";
+        td.colSpan = 6;
+        td.textContent = "아직 수집 이력이 없습니다.";
 
-        row.appendChild(cell);
-        tbody.appendChild(row);
+        tr.appendChild(td);
+        tbody.appendChild(tr);
         return;
       }
 
-      [...allRecords]
-        .reverse()
-        .forEach((record) => {
-          const row = document.createElement("tr");
+      for (const record of [...records].reverse()) {
+        const tr = document.createElement("tr");
 
-          if (record.status !== "ok") {
-            row.classList.add("error-row");
-          }
+        if (record.status !== "ok") {
+          tr.classList.add("error-row");
+        }
 
-          addCell(row, formatKst(record.checkedAt));
+        const statusText =
+          record.status === "ok"
+            ? (
+              record.alertStatus === "sent"
+                ? "정상 · 알림 발송"
+                : record.alertStatus === "disabled"
+                  ? "정상 · 알림 비활성"
+                  : "정상"
+            )
+            : "수집 실패";
 
-          addCell(
-            row,
-            record.status === "ok"
-              ? formatKrw(record.priceKrw)
-              : "—"
-          );
+        const cells = [
+          formatKst(record.checkedAt),
 
-          addCell(
-            row,
-            isNumber(record.krwPer100Jpy)
-              ? `${formatRate(record.krwPer100Jpy)}원`
-              : "—"
-          );
+          record.status === "ok"
+            ? formatKrw(record.priceKrw)
+            : "—",
 
-          addCell(
-            row,
-            isNumber(record.usdKrwPer1)
-              ? `${formatRate(record.usdKrwPer1)}원`
-              : "—"
-          );
+          isNumber(record.krwPer100Jpy)
+            ? `${formatRate(record.krwPer100Jpy)}원`
+            : "—",
 
-          addCell(row, record.fxAsOf ?? "—");
+          isNumber(record.usdKrwPer1)
+            ? `${formatRate(record.usdKrwPer1)}원`
+            : "—",
 
-          let statusText = "수집 실패";
+          record.fxAsOf ?? "—",
 
-          if (record.status === "ok") {
-            statusText = record.fxError
-              ? "가격 정상 · 환율 실패"
-              : "정상";
+          statusText
+        ];
 
-            if (record.alertStatus === "sent") {
-              statusText += " · 알림 발송";
-            }
-          }
+        for (const cellText of cells) {
+          const td = document.createElement("td");
+          td.textContent = cellText;
+          tr.appendChild(td);
+        }
 
-          addCell(row, statusText);
-
-          tbody.appendChild(row);
-        });
+        tbody.appendChild(tr);
+      }
     }
 
-    function renderPriceChart(priceRows) {
-      if (
-        !window.Chart ||
-        priceRows.length === 0
-      ) {
+    function drawPriceChart(rows) {
+      if (!window.Chart || rows.length === 0) {
         return;
       }
 
-      new Chart(getElement("priceChart"), {
+      const canvas = element("priceChart");
+
+      Chart.getChart(canvas)?.destroy();
+
+      new Chart(canvas, {
         type: "line",
         data: {
-          labels: priceRows.map((row) =>
-            formatKst(row.checkedAt)
-          ),
+          labels: rows.map((row) => formatKst(row.checkedAt)),
           datasets: [
             {
               label: "표시 가격",
-              data: priceRows.map((row) =>
-                row.priceKrw
-              ),
+              data: rows.map((row) => row.priceKrw),
               borderColor: "#2563eb",
               backgroundColor: "#2563eb",
               tension: 0.2,
@@ -310,9 +292,7 @@
             },
             {
               label: "알림 기준",
-              data: priceRows.map((row) =>
-                row.thresholdKrw
-              ),
+              data: rows.map((row) => row.thresholdKrw),
               borderColor: "#dc2626",
               borderDash: [6, 6],
               pointRadius: 0,
@@ -322,15 +302,11 @@
         },
         options: {
           responsive: true,
-          interaction: {
-            mode: "index",
-            intersect: false
-          },
           scales: {
             y: {
               ticks: {
                 callback: (value) =>
-                  `${moneyFormatter.format(value)}원`
+                  `${money.format(value)}원`
               }
             }
           }
@@ -338,67 +314,46 @@
       });
     }
 
-    function renderFxChart(fxRows) {
-      if (
-        !window.Chart ||
-        fxRows.length === 0
-      ) {
+    function drawFxChart(rows) {
+      if (!window.Chart || rows.length === 0) {
         return;
       }
 
-      new Chart(getElement("fxChart"), {
+      const canvas = element("fxChart");
+
+      Chart.getChart(canvas)?.destroy();
+
+      new Chart(canvas, {
         type: "line",
         data: {
-          labels: fxRows.map((row) =>
-            formatKst(row.checkedAt)
-          ),
+          labels: rows.map((row) => formatKst(row.checkedAt)),
           datasets: [
             {
               label: "KRW / 100 JPY",
-              data: fxRows.map((row) =>
-                row.krwPer100Jpy
-              ),
+              data: rows.map((row) => row.krwPer100Jpy),
               borderColor: "#16a34a",
-              backgroundColor: "#16a34a",
-              yAxisID: "yJpy",
-              tension: 0.2,
-              pointRadius: 3
+              yAxisID: "jpy",
+              tension: 0.2
             },
             {
               label: "KRW / 1 USD",
-              data: fxRows.map((row) =>
-                row.usdKrwPer1
-              ),
+              data: rows.map((row) => row.usdKrwPer1),
               borderColor: "#ea580c",
-              backgroundColor: "#ea580c",
-              yAxisID: "yUsd",
-              tension: 0.2,
-              pointRadius: 3
+              yAxisID: "usd",
+              tension: 0.2
             }
           ]
         },
         options: {
           responsive: true,
-          interaction: {
-            mode: "index",
-            intersect: false
-          },
           scales: {
-            yJpy: {
+            jpy: {
               type: "linear",
-              position: "left",
-              title: {
-                display: true,
-                text: "KRW / 100 JPY"
-              }
+              position: "left"
             },
-            yUsd: {
+            usd: {
               type: "linear",
               position: "right",
-              title: {
-                display: true,
-                text: "KRW / 1 USD"
-              },
               grid: {
                 drawOnChartArea: false
               }
@@ -410,7 +365,7 @@
 
     async function init() {
       const response = await fetch(
-        `./history.json?time=${Date.now()}`,
+        `./history.json?ts=${Date.now()}`,
         {
           cache: "no-store"
         }
@@ -422,58 +377,58 @@
         );
       }
 
-      const allRecords = await response.json();
+      const records = await response.json();
 
-      if (!Array.isArray(allRecords)) {
+      if (!Array.isArray(records)) {
         throw new Error(
           "history.json 형식이 올바르지 않습니다."
         );
       }
 
-      const priceRows = allRecords.filter(
-        (row) =>
-          row.status === "ok" &&
-          isNumber(row.priceKrw)
+      const successfulRows = records.filter(
+        (record) =>
+          record.status === "ok" &&
+          isNumber(record.priceKrw)
       );
 
-      const fxRows = priceRows.filter(
-        (row) =>
-          isNumber(row.krwPer100Jpy) &&
-          isNumber(row.usdKrwPer1)
+      const fxRows = successfulRows.filter(
+        (record) =>
+          isNumber(record.krwPer100Jpy) &&
+          isNumber(record.usdKrwPer1)
       );
 
-      const latestPrice =
-        priceRows[priceRows.length - 1];
+      const latestRecord = successfulRows.at(-1);
+      const latestFx = fxRows.at(-1);
+      const latestAnyRecord = records.at(-1);
 
-      const latestFx =
-        fxRows[fxRows.length - 1];
+      element("thresholdPrice").textContent = formatKrw(
+        latestAnyRecord?.thresholdKrw ?? 850000
+      );
 
-      if (latestPrice) {
-        getElement("latestPrice").textContent =
-          formatKrw(latestPrice.priceKrw);
-
-        getElement("thresholdPrice").textContent =
-          formatKrw(latestPrice.thresholdKrw);
+      if (latestRecord) {
+        element("latestPrice").textContent = formatKrw(
+          latestRecord.priceKrw
+        );
       }
 
       if (latestFx) {
-        getElement("latestJpy").textContent =
+        element("latestJpy").textContent =
           `${formatRate(latestFx.krwPer100Jpy)}원`;
 
-        getElement("latestUsd").textContent =
+        element("latestUsd").textContent =
           `${formatRate(latestFx.usdKrwPer1)}원`;
 
-        getElement("fxInfo").textContent =
+        element("fxInfo").textContent =
           `환율 기준일: ${latestFx.fxAsOf ?? "알 수 없음"} · ${latestFx.fxSource ?? "참조환율"}`;
       }
 
-      renderTable(allRecords);
-      renderPriceChart(priceRows);
-      renderFxChart(fxRows);
+      renderTable(records);
+      drawPriceChart(successfulRows);
+      drawFxChart(fxRows);
     }
 
     init().catch((error) => {
-      const errorBox = getElement("errorBox");
+      const errorBox = element("errorBox");
 
       errorBox.style.display = "block";
       errorBox.textContent =
