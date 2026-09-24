@@ -1,0 +1,96 @@
+name: Trip.com Price Monitor
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    # UTC 01:00 / 13:00
+    # 한국시간 10:00 / 22:00
+    - cron: "0 1,13 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: trip-price-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 저장소 내려받기
+        uses: actions/checkout@v4
+
+      - name: 진단 폴더 미리 생성
+        run: |
+          mkdir -p debug
+          echo "Workflow started at $(date -u)" > debug/workflow-started.txt
+
+      - name: Node.js 설치
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 필요한 패키지 설치
+        run: npm install --no-audit --no-fund
+
+      - name: Google Chrome Stable 및 가상 화면 설치
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb wget ca-certificates
+
+          if command -v google-chrome >/dev/null 2>&1; then
+            CHROME_BIN="$(command -v google-chrome)"
+          else
+            wget -q \
+              https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+              -O /tmp/google-chrome-stable_current_amd64.deb
+
+            sudo apt-get install -y \
+              /tmp/google-chrome-stable_current_amd64.deb
+
+            CHROME_BIN="$(command -v google-chrome)"
+          fi
+
+          test -x "$CHROME_BIN"
+          "$CHROME_BIN" --version
+
+          echo "CHROME_BIN=$CHROME_BIN" >> "$GITHUB_ENV"
+
+      - name: 원래 Trip.com 주소를 Google Chrome으로 열기
+        id: collect
+        continue-on-error: true
+        env:
+          TRIP_URL: ${{ secrets.TRIP_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          xvfb-run \
+            --auto-servernum \
+            --server-args="-screen 0 1440x1800x24" \
+            node scripts/monitor.mjs
+
+      - name: Chrome 화면 및 진단 파일 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trip-price-diagnostics
+          path: debug/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: 가격 이력 저장
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add docs/history.json data/state.json
+
+          if git diff --cached --quiet; then
+            echo "저장할 변경사항이 없습니다."
+          else
+            git commit -m "chore: record price $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            git push
+          fi
