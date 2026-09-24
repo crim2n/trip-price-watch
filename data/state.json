@@ -1,6 +1,4 @@
 {
   "belowThreshold": false,
-  "alertPending": false,
-  "lastCheckedAt": null,
-  "lastValidPriceKrw": null
+  "alertPending": false
 }
