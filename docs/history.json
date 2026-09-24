@@ -1,1 +1,9 @@
-[]
+[
+  {
+    "status": "error",
+    "checkedAt": "2026-09-24T05:15:02.642Z",
+    "label": "마쓰야마 숙소 가격 감시",
+    "thresholdKrw": 850000,
+    "message": "가격 후보를 찾지 못했습니다. selector=span[class*=\"bold-text__\"][aria-hidden=\"true\"]"
+  }
+]
