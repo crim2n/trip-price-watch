@@ -122,9 +122,40 @@ async function findPrice(page) {
     await page.waitForTimeout(1000);
   }
 
-  throw new Error(
-    `가격 후보를 찾지 못했습니다. selector=${config.priceSelector}`
-  );
+const pageTitle = await page.title().catch(() => "");
+
+const bodyText = await page
+  .locator("body")
+  .innerText()
+  .catch(() => "");
+
+const lowerBodyText = bodyText.toLowerCase();
+
+const blockWords = [
+  "captcha",
+  "verify",
+  "robot",
+  "access denied",
+  "forbidden",
+  "보안",
+  "인증",
+  "접근 제한",
+  "비정상적인 접근"
+].filter((word) => lowerBodyText.includes(word.toLowerCase()));
+
+console.log(
+  "페이지 진단:",
+  JSON.stringify({
+    pageTitle,
+    bodyLength: bodyText.length,
+    hasKrwPrice: /(\d{1,3}(?:,\d{3})+|\d+)\s*원/.test(bodyText),
+    blockWords
+  })
+);
+
+throw new Error(
+  `가격 후보를 찾지 못했습니다. selector=${config.priceSelector}`
+);
 }
 
 async function collectPrice() {
